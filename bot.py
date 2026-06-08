@@ -1,6 +1,14 @@
 import os
 import time
 import asyncio
+
+# --- FIX FOR PYTHON 3.14 ON RENDER ---
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+# -------------------------------------
+
 import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import Message
