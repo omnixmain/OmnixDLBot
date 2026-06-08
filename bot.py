@@ -190,13 +190,37 @@ async def handle_url(client, message: Message):
         is_video = file_name.lower().endswith(('.mp4', '.mkv', '.webm', '.avi'))
         
         if is_video:
+            width, height, duration = 0, 0, 0
+            thumb_path = None
+            try:
+                import subprocess, json
+                probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file_name]
+                probe_out = subprocess.check_output(probe_cmd).decode("utf-8")
+                probe_data = json.loads(probe_out)
+                video_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'video'), None)
+                if video_stream:
+                    width = int(video_stream.get('width', 0))
+                    height = int(video_stream.get('height', 0))
+                duration = int(float(probe_data.get('format', {}).get('duration', 0)))
+                
+                thumb_path = file_name + ".jpg"
+                subprocess.call(["ffmpeg", "-i", file_name, "-ss", "00:00:01.000", "-vframes", "1", thumb_path, "-y", "-v", "quiet"])
+            except Exception:
+                pass
+
             await client.send_video(
                 chat_id=message.chat.id,
                 video=file_name,
                 caption=f"**File:** `{file_name}`",
+                duration=duration,
+                width=width,
+                height=height,
+                thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
                 progress=progress_for_pyrogram,
                 progress_args=("📤 **Uploading Video...**", status_msg, upload_start_time)
             )
+            if thumb_path and os.path.exists(thumb_path):
+                os.remove(thumb_path)
         else:
             await client.send_document(
                 chat_id=message.chat.id,
