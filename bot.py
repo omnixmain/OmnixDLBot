@@ -166,10 +166,8 @@ async def main():
     await web_server()
     await app.start()
     print("Bot is successfully running! Telegram me jake /start bhejein.")
-    from pyrogram import idle
-    await idle()
-    await app.stop()
+    while True:
+        await asyncio.sleep(3600)
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
