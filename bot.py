@@ -102,54 +102,74 @@ async def handle_url(client, message: Message):
         start_time = time.time()
         last_update = time.time()
         
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url) as response:
-                if response.status != 200:
-                    await status_msg.edit_text(f"❌ Error: Download fail ho gaya. Status code: {response.status}")
-                    return
+        if ".m3u8" in url.lower() or "m3u8" in file_name.lower():
+            import yt_dlp
+            import static_ffmpeg
+            static_ffmpeg.add_paths()
+            
+            if file_name.endswith(".m3u8"):
+                file_name = file_name[:-5] + ".mp4"
+            elif not file_name.endswith(".mp4"):
+                file_name += ".mp4"
                 
-                import email.message
-                import mimetypes
-                import urllib.parse
-                
-                content_dispo = response.headers.get('Content-Disposition')
-                if content_dispo:
-                    msg = email.message.EmailMessage()
-                    msg['content-type'] = content_dispo
-                    filename_from_header = msg.get_param('filename', header='content-type')
-                    if filename_from_header:
-                        file_name = urllib.parse.unquote(filename_from_header)
-                
-                if "." not in file_name:
-                    content_type = response.headers.get('Content-Type', '').split(';')[0]
-                    ext = mimetypes.guess_extension(content_type)
-                    if ext:
-                        if ext == ".jpe": ext = ".jpg"
-                        file_name += ext
-                
-                total_size = int(response.headers.get('content-length', 0))
-                downloaded_size = 0
-                
-                with open(file_name, 'wb') as f:
-                    async for chunk in response.content.iter_chunked(1024 * 1024): # 1MB chunks
-                        f.write(chunk)
-                        downloaded_size += len(chunk)
-                        
-                        now = time.time()
-                        # Har 5 second me progress update
-                        if (now - last_update) >= 5:
-                            last_update = now
-                            prog_str = progress_bar(downloaded_size, total_size)
-                            speed = downloaded_size / (now - start_time)
-                            try:
-                                await status_msg.edit_text(
-                                    f"📥 **Downloading...**\n"
-                                    f"{prog_str}\n"
-                                    f"**Size:** {human_readable_size(downloaded_size)} / {human_readable_size(total_size)}\n"
-                                    f"**Speed:** {human_readable_size(speed)}/s"
-                                )
-                            except Exception:
-                                pass
+            await status_msg.edit_text(f"📥 **Downloading M3U8 Stream:** `{file_name}`\n(Isme thoda time lag sakta hai, please wait...)")
+            
+            def download_m3u8():
+                ydl_opts = {'outtmpl': file_name, 'format': 'best', 'quiet': True}
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([url])
+            
+            await asyncio.to_thread(download_m3u8)
+            
+        else:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        await status_msg.edit_text(f"❌ Error: Download fail ho gaya. Status code: {response.status}")
+                        return
+                    
+                    import email.message
+                    import mimetypes
+                    import urllib.parse
+                    
+                    content_dispo = response.headers.get('Content-Disposition')
+                    if content_dispo:
+                        msg = email.message.EmailMessage()
+                        msg['content-type'] = content_dispo
+                        filename_from_header = msg.get_param('filename', header='content-type')
+                        if filename_from_header:
+                            file_name = urllib.parse.unquote(filename_from_header)
+                    
+                    if "." not in file_name:
+                        content_type = response.headers.get('Content-Type', '').split(';')[0]
+                        ext = mimetypes.guess_extension(content_type)
+                        if ext:
+                            if ext == ".jpe": ext = ".jpg"
+                            file_name += ext
+                    
+                    total_size = int(response.headers.get('content-length', 0))
+                    downloaded_size = 0
+                    
+                    with open(file_name, 'wb') as f:
+                        async for chunk in response.content.iter_chunked(1024 * 1024): # 1MB chunks
+                            f.write(chunk)
+                            downloaded_size += len(chunk)
+                            
+                            now = time.time()
+                            # Har 5 second me progress update
+                            if (now - last_update) >= 5:
+                                last_update = now
+                                prog_str = progress_bar(downloaded_size, total_size)
+                                speed = downloaded_size / (now - start_time)
+                                try:
+                                    await status_msg.edit_text(
+                                        f"📥 **Downloading...**\n"
+                                        f"{prog_str}\n"
+                                        f"**Size:** {human_readable_size(downloaded_size)} / {human_readable_size(total_size)}\n"
+                                        f"**Speed:** {human_readable_size(speed)}/s"
+                                    )
+                                except Exception:
+                                    pass
 
         await status_msg.edit_text("📤 Download Complete! Ab Telegram par upload kar raha hu...")
         
