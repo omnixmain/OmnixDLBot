@@ -133,8 +133,12 @@ async def handle_url(client, message: Message):
             await asyncio.to_thread(download_m3u8)
             
         else:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Referer": "/".join(url.split("/")[:3]) + "/" # e.g. https://domain.com/
+            }
             async with aiohttp.ClientSession() as session:
-                async with session.get(url) as response:
+                async with session.get(url, headers=headers) as response:
                     if response.status != 200:
                         await status_msg.edit_text(f"❌ Error: Download fail ho gaya. Status code: {response.status}")
                         return
