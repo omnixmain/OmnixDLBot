@@ -82,20 +82,31 @@ async def start_cmd(client, message):
 
 @app.on_message(filters.text & filters.private & ~filters.command("start"))
 async def handle_url(client, message: Message):
-    url = message.text.strip()
+    text = message.text.strip()
     
+    if "|" in text:
+        url, custom_name = text.split("|", 1)
+        url = url.strip()
+        custom_name = custom_name.strip()
+    else:
+        url = text
+        custom_name = None
+        
     if not (url.startswith("http://") or url.startswith("https://")):
-        await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.")
+        await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.\nAgar custom naam chahiye toh aise bhejein:\n`URL | MyVideo.mp4`")
         return
 
     status_msg = await message.reply_text("⏳ Link process kar raha hu...")
     file_name = "downloaded_file"
     
     try:
-        # Extract filename from URL
-        file_name = url.split("/")[-1].split("?")[0]
-        if not file_name:
-            file_name = "downloaded_file"
+        # Extract filename from URL or use custom name
+        if custom_name:
+            file_name = custom_name
+        else:
+            file_name = url.split("/")[-1].split("?")[0]
+            if not file_name:
+                file_name = "downloaded_file"
 
         await status_msg.edit_text(f"📥 **Downloading Start:** `{file_name}`...")
 
