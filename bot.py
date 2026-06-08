@@ -108,6 +108,25 @@ async def handle_url(client, message: Message):
                     await status_msg.edit_text(f"❌ Error: Download fail ho gaya. Status code: {response.status}")
                     return
                 
+                import email.message
+                import mimetypes
+                import urllib.parse
+                
+                content_dispo = response.headers.get('Content-Disposition')
+                if content_dispo:
+                    msg = email.message.EmailMessage()
+                    msg['content-type'] = content_dispo
+                    filename_from_header = msg.get_param('filename', header='content-type')
+                    if filename_from_header:
+                        file_name = urllib.parse.unquote(filename_from_header)
+                
+                if "." not in file_name:
+                    content_type = response.headers.get('Content-Type', '').split(';')[0]
+                    ext = mimetypes.guess_extension(content_type)
+                    if ext:
+                        if ext == ".jpe": ext = ".jpg"
+                        file_name += ext
+                
                 total_size = int(response.headers.get('content-length', 0))
                 downloaded_size = 0
                 
@@ -137,13 +156,24 @@ async def handle_url(client, message: Message):
         upload_start_time = time.time()
         
         # Uploading to Telegram
-        await client.send_document(
-            chat_id=message.chat.id,
-            document=file_name,
-            caption=f"**File:** `{file_name}`",
-            progress=progress_for_pyrogram,
-            progress_args=("📤 **Uploading...**", status_msg, upload_start_time)
-        )
+        is_video = file_name.lower().endswith(('.mp4', '.mkv', '.webm', '.avi'))
+        
+        if is_video:
+            await client.send_video(
+                chat_id=message.chat.id,
+                video=file_name,
+                caption=f"**File:** `{file_name}`",
+                progress=progress_for_pyrogram,
+                progress_args=("📤 **Uploading Video...**", status_msg, upload_start_time)
+            )
+        else:
+            await client.send_document(
+                chat_id=message.chat.id,
+                document=file_name,
+                caption=f"**File:** `{file_name}`",
+                progress=progress_for_pyrogram,
+                progress_args=("📤 **Uploading...**", status_msg, upload_start_time)
+            )
         
         # Space bachane ke liye file delete karna
         os.remove(file_name)
