@@ -146,6 +146,30 @@ async def handle_url(client, message: Message):
         if os.path.exists(file_name):
             os.remove(file_name)
 
-if __name__ == "__main__":
+from aiohttp import web
+
+async def web_server():
+    async def handle(request):
+        return web.Response(text="Bot is running smoothly on Render!")
+    
+    webapp = web.Application()
+    webapp.router.add_get('/', handle)
+    runner = web.AppRunner(webapp)
+    await runner.setup()
+    
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    print(f"Web server started on port {port}")
+
+async def main():
+    await web_server()
+    await app.start()
     print("Bot is successfully running! Telegram me jake /start bhejein.")
-    app.run()
+    from pyrogram import idle
+    await idle()
+    await app.stop()
+
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
