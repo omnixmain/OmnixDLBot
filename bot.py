@@ -87,6 +87,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
     file_name = "downloaded_file"
     
     try:
+        thumb_path = None
         # Extract filename from URL or use custom name
         if custom_name:
             file_name = custom_name
