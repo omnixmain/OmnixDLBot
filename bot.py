@@ -187,10 +187,8 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         is_video = file_name.lower().endswith(('.mp4', '.mkv', '.webm', '.avi', '.ts'))
         
         # --- THUMBNAIL / BANNER HANDLING ---
-        thumb_path = None
         if banner_url:
             try:
-                import aiohttp
                 async with aiohttp.ClientSession() as session:
                     async with session.get(banner_url) as resp:
                         if resp.status == 200:
