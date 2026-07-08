@@ -13,7 +13,7 @@ except RuntimeError:
 
 import aiohttp
 from pyrogram import Client, filters
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
@@ -34,6 +34,8 @@ app = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
+
+active_processes = {}
 
 def human_readable_size(size):
     if not size:
@@ -82,6 +84,34 @@ async def progress_for_pyrogram(current, total, ud_type, message, start_time):
 async def start_cmd(client, message):
     await message.reply_text("Hello Bhai! Main ek URL Uploader Bot hu.\n\nMujhe koi bhi direct download link ya playlist file (M3U/JSON) bhejiye, main usko download karke aapko Telegram me upload karke de dunga.")
 
+async def safe_edit_text(msg, text):
+    try:
+        await msg.edit_text(text)
+    except Exception:
+        pass
+
+@app.on_message(filters.command("stop"))
+async def stop_cmd(client, message):
+    chat_id = message.chat.id
+    if active_processes.get(chat_id, False):
+        active_processes[chat_id] = False
+        await message.reply_text("🛑 Process ko rokne ki request accept ho gayi hai. Current download complete hone ke baad agla link process nahi hoga.")
+    else:
+        await message.reply_text("❌ Koi active process nahi hai rukne ke liye.")
+
+@app.on_callback_query(filters.regex("^stop_process$"))
+async def stop_process_cb(client, callback_query: CallbackQuery):
+    chat_id = callback_query.message.chat.id
+    if active_processes.get(chat_id, False):
+        active_processes[chat_id] = False
+        await callback_query.answer("🛑 Stopping... (Current download ke baad ruk jayega)", show_alert=True)
+        try:
+            await callback_query.message.edit_reply_markup(None)
+        except Exception:
+            pass
+    else:
+        await callback_query.answer("❌ Koi process chal nahi raha.", show_alert=True)
+
 async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix=""):
     status_msg = await client.send_message(chat_id, f"⏳ {prefix} Link process kar raha hu...\n`{url}`")
     file_name = "downloaded_file"
@@ -101,25 +131,24 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         if not file_name:
             file_name = "downloaded_file"
 
-        await status_msg.edit_text(f"📥 {prefix} **Downloading Start:** `{file_name}`...")
+        await safe_edit_text(status_msg, f"📥 {prefix} **Downloading Start:** `{file_name}`...")
 
         start_time = time.time()
         last_update = time.time()
         
         if ".m3u8" in url.lower() or "m3u8" in file_name.lower():
-            import yt_dlp
-            import static_ffmpeg
-            static_ffmpeg.add_paths()
-            
             if file_name.endswith(".m3u8"):
                 file_name = file_name[:-5] + ".mp4"
             elif not file_name.endswith(".mp4"):
                 file_name += ".mp4"
                 
-            await status_msg.edit_text(f"📥 {prefix} **Downloading M3U8 Stream:** `{file_name}`\n(Isme thoda time lag sakta hai, please wait...)")
+            await safe_edit_text(status_msg, f"📥 {prefix} **Downloading M3U8 Stream:** `{file_name}`\n(Isme thoda time lag sakta hai, please wait...)")
             
             def download_m3u8():
-                ydl_opts = {'outtmpl': file_name, 'format': 'best', 'quiet': True}
+                import yt_dlp
+                import static_ffmpeg
+                static_ffmpeg.add_paths()
+                ydl_opts = {'outtmpl': file_name, 'format': 'best', 'quiet': True, 'socket_timeout': 30}
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
             
@@ -133,7 +162,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as response:
                     if response.status != 200:
-                        await status_msg.edit_text(f"❌ {prefix} Error: Download fail ho gaya. Status code: {response.status}")
+                        await safe_edit_text(status_msg, f"❌ {prefix} Error: Download fail ho gaya. Status code: {response.status}")
                         return
                     
                     import email.message
@@ -180,11 +209,17 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                                 except Exception:
                                     pass
 
-        await status_msg.edit_text(f"📤 {prefix} Download Complete! Ab Telegram par upload kar raha hu...")
+        await safe_edit_text(status_msg, f"📤 {prefix} Download Complete! Ab Telegram par upload kar raha hu...")
         
         upload_start_time = time.time()
         
         is_video = file_name.lower().endswith(('.mp4', '.mkv', '.webm', '.avi', '.ts'))
+        is_image = file_name.lower().endswith(('.png', '.jpg', '.jpeg', '.webp', '.gif'))
+        
+        clean_name = os.path.splitext(file_name)[0]
+        clean_name = clean_name.replace('.', ' ').replace('-', ' ').replace('_', ' ')
+        clean_name = re.sub(r'\s+', ' ', clean_name).strip()
+        caption_text = f"{prefix} **{clean_name}**"
         
         # --- THUMBNAIL / BANNER HANDLING ---
         if banner_url:
@@ -222,7 +257,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
             await client.send_video(
                 chat_id=chat_id,
                 video=file_name,
-                caption=f"{prefix} **File:** `{file_name}`",
+                caption=caption_text,
                 duration=duration,
                 width=width,
                 height=height,
@@ -232,11 +267,19 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
             )
             if thumb_path and os.path.exists(thumb_path):
                 os.remove(thumb_path)
+        elif is_image:
+            await client.send_photo(
+                chat_id=chat_id,
+                photo=file_name,
+                caption=caption_text,
+                progress=progress_for_pyrogram,
+                progress_args=(f"📤 {prefix} **Uploading Photo...**", status_msg, upload_start_time)
+            )
         else:
             await client.send_document(
                 chat_id=chat_id,
                 document=file_name,
-                caption=f"{prefix} **File:** `{file_name}`",
+                caption=caption_text,
                 thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
                 progress=progress_for_pyrogram,
                 progress_args=(f"📤 {prefix} **Uploading...**", status_msg, upload_start_time)
@@ -245,17 +288,19 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                 os.remove(thumb_path)
         
         # Space bachane ke liye file delete karna
-        os.remove(file_name)
+        if os.path.exists(file_name):
+            os.remove(file_name)
         await status_msg.delete()
         
     except Exception as e:
-        await status_msg.edit_text(f"❌ {prefix} Error aa gaya bhai: `{str(e)}`")
+        err_msg = str(e).replace('`', '').replace('*', '')[:300]
+        await safe_edit_text(status_msg, f"❌ {prefix} Error aa gaya bhai: `{err_msg}`")
         if os.path.exists(file_name):
             os.remove(file_name)
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
 
-@app.on_message(filters.text & filters.private & ~filters.command("start"))
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "stop"]))
 async def handle_url(client, message: Message):
     text = message.text.strip()
     
@@ -278,15 +323,32 @@ def parse_json_playlist(file_path):
     try:
         with open(file_path, 'r', encoding='utf-8') as f:
             data = json.load(f)
-            if isinstance(data, list):
+            
+            # Skymovies format (Hot-Short-Film etc)
+            if isinstance(data, dict) and "Data" in data and isinstance(data["Data"], list):
+                for item in data["Data"]:
+                    name = item.get('name') or item.get('title')
+                    poster = item.get('poster') or item.get('banner')
+                    downloads = item.get('downloads')
+                    
+                    if isinstance(downloads, dict):
+                        items.append({
+                            'type': 'movie_bundle',
+                            'name': name,
+                            'poster': poster,
+                            'downloads': downloads
+                        })
+            
+            # Standard list format
+            elif isinstance(data, list):
                 for item in data:
                     url = item.get('url') or item.get('stream_url') or item.get('link') or item.get('stream url')
                     name = item.get('name') or item.get('title')
                     banner = item.get('banner') or item.get('image') or item.get('thumb') or item.get('thumbnail') or item.get('logo')
                     if url:
                         items.append((url, name, banner))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"JSON Parse Error: {e}")
     return items
 
 def parse_m3u_playlist(file_path):
@@ -357,15 +419,49 @@ async def handle_document(client, message: Message):
         await status_msg.edit_text("❌ File me koi valid URLs nahi mile. JSON/M3U format check karein.")
         return
         
-    await status_msg.edit_text(f"✅ File process ho gayi. Total **{len(items)}** links mile hain. Ab ek-ek karke download start kar raha hu...")
+    reply_markup = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🛑 Stop Process", callback_data="stop_process")]]
+    )
+    await status_msg.edit_text(f"✅ File process ho gayi. Total **{len(items)}** links mile hain. Ab ek-ek karke download start kar raha hu...", reply_markup=reply_markup)
     
-    for idx, (url, custom_name, banner_url) in enumerate(items, start=1):
+    active_processes[message.chat.id] = True
+    
+    for idx, item in enumerate(items, start=1):
+        if not active_processes.get(message.chat.id, True):
+            await client.send_message(message.chat.id, "🛑 Process ko user dwara stop kar diya gaya hai.")
+            break
         try:
-            await process_single_link(client, message.chat.id, url, custom_name, banner_url, f"[{idx}/{len(items)}]")
+            if isinstance(item, tuple):
+                url, custom_name, banner_url = item
+                await process_single_link(client, message.chat.id, url, custom_name, banner_url, f"[{idx}/{len(items)}]")
+            elif isinstance(item, dict) and item.get('type') == 'movie_bundle':
+                name = item.get('name', 'Unknown')
+                poster = item.get('poster')
+                downloads = item.get('downloads', {})
+                
+                # Send poster as photo
+                if poster:
+                    try:
+                        await client.send_photo(message.chat.id, photo=poster, caption=f"**{name}**")
+                    except Exception as e:
+                        await client.send_message(message.chat.id, f"**{name}**\n(Poster Error: `{e}`)")
+                else:
+                    await client.send_message(message.chat.id, f"**{name}**")
+                    
+                # Download each URL
+                for q_name, d_url in downloads.items():
+                    if not active_processes.get(message.chat.id, True):
+                        break
+                    custom_file_name = f"{name} - {q_name}.mp4"
+                    custom_file_name = "".join(c for c in custom_file_name if c.isalnum() or c in (' ', '.', '-', '_')).strip()
+                    await process_single_link(client, message.chat.id, d_url, custom_file_name, None, f"[{idx}/{len(items)} - {q_name}]")
         except Exception as e:
-            await client.send_message(message.chat.id, f"❌ Link {idx} me error aaya: `{str(e)}`\nURL: `{url}`")
+            await client.send_message(message.chat.id, f"❌ Link {idx} me error aaya: `{str(e)}`")
             
-    await client.send_message(message.chat.id, f"🎉 Saare {len(items)} links process ho gaye!")
+    if active_processes.get(message.chat.id, False):
+        await client.send_message(message.chat.id, f"🎉 Saare {len(items)} links process ho gaye!")
+    
+    active_processes.pop(message.chat.id, None)
 
 from aiohttp import web
 
