@@ -463,6 +463,9 @@ async def handle_document(client, message: Message):
         except Exception as e:
             await client.send_message(message.chat.id, f"❌ Link {idx} me error aaya: `{str(e)}`")
             
+        # Har file ke baad thoda delay takki Telegram block/flood-wait na kare
+        await asyncio.sleep(3)
+            
     if active_processes.get(message.chat.id, False):
         await client.send_message(message.chat.id, f"🎉 Saare {len(items)} links process ho gaye!")
     
