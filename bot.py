@@ -95,7 +95,7 @@ async def stop_cmd(client, message):
     chat_id = message.chat.id
     if active_processes.get(chat_id, False):
         active_processes[chat_id] = False
-        await message.reply_text("🛑 Process ko rokne ki request accept ho gayi hai. Current download complete hone ke baad agla link process nahi hoga.")
+        await message.reply_text("🛑 Process ko rok di gai hai. Current download turant band ho jayega.")
     else:
         await message.reply_text("❌ Koi active process nahi hai rukne ke liye.")
 
@@ -104,7 +104,7 @@ async def stop_process_cb(client, callback_query: CallbackQuery):
     chat_id = callback_query.message.chat.id
     if active_processes.get(chat_id, False):
         active_processes[chat_id] = False
-        await callback_query.answer("🛑 Stopping... (Current download ke baad ruk jayega)", show_alert=True)
+        await callback_query.answer("🛑 Stopping... (Current download turant ruk jayega)", show_alert=True)
         try:
             await callback_query.message.edit_reply_markup(None)
         except Exception:
@@ -112,7 +112,7 @@ async def stop_process_cb(client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ Koi process chal nahi raha.", show_alert=True)
 
-async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix=""):
+async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix="", quality_text=None):
     status_msg = await client.send_message(chat_id, f"⏳ {prefix} Link process kar raha hu...\n`{url}`")
     file_name = "downloaded_file"
     
@@ -190,6 +190,8 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                     
                     with open(file_name, 'wb') as f:
                         async for chunk in response.content.iter_chunked(1024 * 1024): # 1MB chunks
+                            if not active_processes.get(chat_id, True):
+                                raise Exception("Download stopped by user.")
                             f.write(chunk)
                             downloaded_size += len(chunk)
                             
@@ -219,7 +221,10 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         clean_name = os.path.splitext(file_name)[0]
         clean_name = clean_name.replace('.', ' ').replace('-', ' ').replace('_', ' ')
         clean_name = re.sub(r'\s+', ' ', clean_name).strip()
-        caption_text = f"{prefix} **{clean_name}**"
+        
+        caption_text = f"**{clean_name}**"
+        if quality_text:
+            caption_text += f"\n\n**Quality:** {quality_text}"
         
         # --- THUMBNAIL / BANNER HANDLING ---
         if banner_url:
@@ -452,9 +457,9 @@ async def handle_document(client, message: Message):
                 for q_name, d_url in downloads.items():
                     if not active_processes.get(message.chat.id, True):
                         break
-                    custom_file_name = f"{name} - {q_name}.mp4"
+                    custom_file_name = f"{name}.mp4"
                     custom_file_name = "".join(c for c in custom_file_name if c.isalnum() or c in (' ', '.', '-', '_')).strip()
-                    await process_single_link(client, message.chat.id, d_url, custom_file_name, None, f"[{idx}/{len(items)} - {q_name}]")
+                    await process_single_link(client, message.chat.id, d_url, custom_file_name, None, f"[{idx}/{len(items)}]", q_name)
         except Exception as e:
             await client.send_message(message.chat.id, f"❌ Link {idx} me error aaya: `{str(e)}`")
             
