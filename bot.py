@@ -3,6 +3,11 @@ import time
 import asyncio
 import json
 import re
+import requests
+import base64
+import urllib.parse
+from Cryptodome.Cipher import AES
+from Cryptodome.Util.Padding import unpad
 
 # --- FIX FOR PYTHON 3.14 ON RENDER ---
 try:
@@ -36,6 +41,65 @@ app = Client(
 )
 
 active_processes = {}
+
+def decrypt_shemaroo_url(url_line):
+    params_str = url_line.replace('shemaroomovies-', '')
+    
+    if '&type=' in url_line or '&catalog_id=' in url_line:
+        params = dict(urllib.parse.parse_qsl(params_str))
+        catalog_id = params.get('catalog_id', '')
+        content_id = params.get('content_id', '')
+        category = params.get('category', '')
+        content_def = params.get('content_def', '')
+        body = f"catalog_id={catalog_id}&content_id={content_id}&category={category}&content_def={content_def}&user_agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36"
+    else:
+        content_id = params_str
+        body = f"catalog_id=5b62b824c1df412e5c000000&content_id={content_id}&category=all&content_def=AVOD"
+
+    url = "https://www.shemaroome.com/users/user_all_lists"
+    headers = {
+        "accept": "*/*",
+        "accept-language": "en-IN,en-GB;q=0.9,en-US;q=0.8,en;q=0.7",
+        "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+        "sec-ch-ua": '"Not(A:Brand";v="99", "Google Chrome";v="133", "Chromium";v="133"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Windows"',
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+        "x-requested-with": "XMLHttpRequest",
+        "Referer": "https://www.shemaroome.com/",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+    }
+
+    try:
+        response = requests.post(url, headers=headers, data=body, timeout=15)
+        response.raise_for_status()
+        data = response.json()
+        
+        sm_url = ""
+        stream_key = ""
+        
+        if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
+            item = data["data"][0]
+            if "play_url" in item:
+                encrypted_str = item["play_url"]["sm_url"]
+                key_hex = "0000100000000000000000000000000000000000000000000000000000000000"
+                iv_hex  = "00000000000000000000000000000000"
+                key = bytes.fromhex(key_hex)
+                iv = bytes.fromhex(iv_hex)
+                cipher = AES.new(key, AES.MODE_CBC, iv)
+                encrypted_data = base64.b64decode(encrypted_str)
+                decrypted_bytes = unpad(cipher.decrypt(encrypted_data), AES.block_size)
+                sm_url = decrypted_bytes.decode('utf-8')
+            
+            if "drm_key" in item:
+                stream_key = item["drm_key"]
+                
+        return sm_url, stream_key, data
+    except Exception as e:
+        print("Shemaroo API Error:", e)
+        return None, None, None
 
 def human_readable_size(size):
     if not size:
@@ -112,7 +176,7 @@ async def stop_process_cb(client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ Koi process chal nahi raha.", show_alert=True)
 
-async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix="", quality_text=None):
+async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix="", quality_text=None, stream_key=None):
     status_msg = await client.send_message(chat_id, f"⏳ {prefix} Link process kar raha hu...\n`{url}`")
     file_name = "downloaded_file"
     
@@ -148,7 +212,16 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                 import yt_dlp
                 import static_ffmpeg
                 static_ffmpeg.add_paths()
-                ydl_opts = {'outtmpl': file_name, 'format': 'best', 'quiet': True, 'socket_timeout': 30}
+                ydl_opts = {
+                    'outtmpl': file_name, 
+                    'format': 'bestvideo+bestaudio/best', 
+                    'quiet': True, 
+                    'socket_timeout': 30,
+                    'nopart': True,
+                    'concurrent_fragment_downloads': 1
+                }
+                if stream_key:
+                    ydl_opts['http_headers'] = {'stream_key': stream_key}
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ydl.download([url])
             
@@ -317,11 +390,25 @@ async def handle_url(client, message: Message):
         url = text
         custom_name = None
         
+    stream_key = None
+    
+    if "shemaroomovies-" in url or "&catalog_id=" in url:
+        await message.reply_text("⏳ Shemaroo link decrypt ho raha hai...")
+        sm_url, s_key, _ = decrypt_shemaroo_url(url)
+        if sm_url:
+            url = sm_url
+            stream_key = s_key
+            if not custom_name:
+                custom_name = "Shemaroo_Video.mp4"
+        else:
+            await message.reply_text("❌ Shemaroo link decrypt nahi ho paya. Invalid ID/Token.")
+            return
+            
     if not (url.startswith("http://") or url.startswith("https://")):
         await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.\nAgar custom naam chahiye toh aise bhejein:\n`URL | MyVideo.mp4`")
         return
 
-    await process_single_link(client, message.chat.id, url, custom_name, None)
+    await process_single_link(client, message.chat.id, url, custom_name, None, "", None, stream_key)
 
 def parse_json_playlist(file_path):
     items = []
