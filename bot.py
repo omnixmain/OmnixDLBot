@@ -44,8 +44,10 @@ active_processes = {}
 
 def decrypt_shemaroo_url(url_line):
     params_str = url_line.replace('shemaroomovies-', '')
+    if params_str.startswith('&'):
+        params_str = params_str[1:]
     
-    if '&type=' in url_line or '&catalog_id=' in url_line:
+    if 'type=' in url_line or 'catalog_id=' in url_line:
         params = dict(urllib.parse.parse_qsl(params_str))
         catalog_id = params.get('catalog_id', '')
         content_id = params.get('content_id', '')
@@ -77,26 +79,24 @@ def decrypt_shemaroo_url(url_line):
         response.raise_for_status()
         data = response.json()
         
-        sm_url = ""
-        stream_key = ""
-        
-        if "data" in data and isinstance(data["data"], list) and len(data["data"]) > 0:
-            item = data["data"][0]
-            if "play_url" in item:
-                encrypted_str = item["play_url"]["sm_url"]
-                key_hex = "0000100000000000000000000000000000000000000000000000000000000000"
-                iv_hex  = "00000000000000000000000000000000"
-                key = bytes.fromhex(key_hex)
-                iv = bytes.fromhex(iv_hex)
-                cipher = AES.new(key, AES.MODE_CBC, iv)
-                encrypted_data = base64.b64decode(encrypted_str)
-                decrypted_bytes = unpad(cipher.decrypt(encrypted_data), AES.block_size)
-                sm_url = decrypted_bytes.decode('utf-8')
+        if "new_play_url" in data and "key" in data:
+            ciphertext = base64.b64decode(data["new_play_url"])
+            key = base64.b64decode(data["key"])
+            iv = bytes.fromhex("00000000000000000000000000000000")
             
-            if "drm_key" in item:
-                stream_key = item["drm_key"]
+            cipher = AES.new(key, AES.MODE_CBC, iv)
+            decrypted = cipher.decrypt(ciphertext)
+            
+            try:
+                decrypted_url = unpad(decrypted, AES.block_size).decode('utf-8')
+            except ValueError:
+                decrypted_url = decrypted.decode('utf-8').rstrip('\x00')
                 
-        return sm_url, stream_key, data
+            stream_key = data.get("stream_key", "")
+            return decrypted_url, stream_key, data
+        else:
+            print("Shemaroo API Error: No new_play_url/key found")
+            return None, None, None
     except Exception as e:
         print("Shemaroo API Error:", e)
         return None, None, None
