@@ -4,3 +4,5 @@ aiohttp==3.9.5
 python-dotenv==1.0.1
 yt-dlp
 static-ffmpeg
+requests
+pycryptodomex
