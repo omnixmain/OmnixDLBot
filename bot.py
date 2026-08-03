@@ -41,7 +41,6 @@ app = Client(
 )
 
 active_processes = {}
-user_states = {}
 
 def decrypt_shemaroo_url(url_line):
     params_str = url_line.replace('shemaroomovies-', '')
@@ -391,60 +390,45 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
 
-@app.on_message((filters.text | filters.photo | filters.document) & filters.private & ~filters.command(["start", "stop"]))
+@app.on_message(filters.text & filters.private & ~filters.command(["start", "stop"]))
 async def handle_message(client, message: Message):
-    chat_id = message.chat.id
-    
-    if chat_id in user_states:
-        state_data = user_states[chat_id]
-        
-        if state_data['state'] == 'WAITING_FOR_NAME':
-            if message.text:
-                if message.text.strip().lower() in ["/skip", "ok"]:
-                    state_data['custom_name'] = None
-                else:
-                    state_data['custom_name'] = message.text.strip()
-            else:
-                state_data['custom_name'] = None
-                
-            state_data['state'] = 'WAITING_FOR_BANNER'
-            await message.reply_text("🖼️ Ab is video ke liye Cover Banner (Photo/Document) bhejein, ya phir 'ok' likh kar bhej dein agar banner nahi lagana hai:")
-            return
-            
-        elif state_data['state'] == 'WAITING_FOR_BANNER':
-            banner_path = None
-            if message.photo:
-                banner_path = await message.download()
-            elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
-                banner_path = await message.download()
-            elif message.text and message.text.strip().lower() in ["/skip", "ok"]:
-                pass
-            else:
-                await message.reply_text("❌ Kripya ek photo bhejein ya 'ok' likhein.")
-                return
-            
-            url = state_data['url']
-            custom_name = state_data['custom_name']
-            stream_key = state_data.get('stream_key')
-            del user_states[chat_id]
-            
-            await process_single_link(client, chat_id, url, custom_name=custom_name, banner_path=banner_path, stream_key=stream_key)
-            return
-
-    # New URL handling
-    if not message.text:
-        return
-        
     text = message.text.strip()
     
-    if "|" in text:
-        url, custom_name = text.split("|", 1)
-        url = url.strip()
-        custom_name = custom_name.strip()
+    custom_name = None
+    banner_url = None
+    url = ""
+    
+    # Parse multi-line format
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    if len(lines) >= 3:
+        custom_name = lines[0]
+        banner_url = lines[1]
+        url = lines[2]
+    elif len(lines) == 2:
+        custom_name = lines[0]
+        url = lines[1]
     else:
-        url = text
-        custom_name = None
-        
+        # Fallback to original | split or single line
+        if "|" in text:
+            url, custom_name = text.split("|", 1)
+            url = url.strip()
+            custom_name = custom_name.strip()
+        else:
+            url = text
+
+    # Basic validation to see if URL is in the correct place, swap if user put URL first
+    if not (url.startswith("http://") or url.startswith("https://")):
+        if len(lines) >= 2 and (lines[0].startswith("http://") or lines[0].startswith("https://")):
+            url = lines[0]
+            if len(lines) == 2:
+                custom_name = lines[1]
+            else:
+                banner_url = lines[1]
+                custom_name = lines[2]
+        else:
+            await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.\n\n**Format (3 Lines):**\n`Video Name`\n`Banner Image URL (optional)`\n`Download URL`")
+            return
+            
     stream_key = None
     
     if "shemaroomovies-" in url or "&catalog_id=" in url:
@@ -458,17 +442,8 @@ async def handle_message(client, message: Message):
         else:
             await message.reply_text("❌ Shemaroo link decrypt nahi ho paya. Invalid ID/Token.")
             return
-            
-    if not (url.startswith("http://") or url.startswith("https://")):
-        await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.")
-        return
 
-    if custom_name:
-        user_states[chat_id] = {'url': url, 'custom_name': custom_name, 'stream_key': stream_key, 'state': 'WAITING_FOR_BANNER'}
-        await message.reply_text(f"✅ Name set: `{custom_name}`\n\n🖼️ Ab is video ke liye Cover Banner (Photo/Document) bhejein, ya phir 'ok' likh kar bhej dein:")
-    else:
-        user_states[chat_id] = {'url': url, 'stream_key': stream_key, 'state': 'WAITING_FOR_NAME'}
-        await message.reply_text("📝 Kripya is video ke liye Custom Name (Title) likh kar bhejein.\n\nAgar default name use karna hai toh 'ok' likh kar bhejein:")
+    await process_single_link(client, message.chat.id, url, custom_name, banner_url, "", None, stream_key)
 
 def parse_json_playlist(file_path):
     items = []
