@@ -6,4 +6,3 @@ yt-dlp
 static-ffmpeg
 requests
 pycryptodomex
-playwright

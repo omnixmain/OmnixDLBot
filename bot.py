@@ -20,7 +20,6 @@ import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
-from playwright.async_api import async_playwright
 
 # Load environment variables from .env file
 load_dotenv()
@@ -101,58 +100,6 @@ def decrypt_shemaroo_url(url_line):
     except Exception as e:
         print("Shemaroo API Error:", e)
         return None, None, None
-
-async def extract_stream_from_page(page_url):
-    stream_url = None
-    page_title = None
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080}
-            )
-            page = await context.new_page()
-
-            async def handle_response(response):
-                nonlocal stream_url
-                if stream_url:
-                    return
-                
-                url = response.url
-                
-                is_media_url = (".m3u8" in url or ".mp4" in url)
-                is_media_resource = response.request.resource_type in ["media", "fetch", "xhr"]
-                
-                headers = response.headers
-                content_type = headers.get("content-type", "").lower()
-                is_media_content = "video/" in content_type or "mpegurl" in content_type or "octet-stream" in content_type
-
-                if (is_media_url or (is_media_resource and is_media_content)) and not stream_url:
-                    if "ad_" not in url and "tracking" not in url and ".png" not in url and ".jpg" not in url:
-                        stream_url = url
-                        print(f"Extracted Stream URL: {stream_url}")
-
-            page.on("response", handle_response)
-            
-            print(f"Navigating to: {page_url}")
-            await page.goto(page_url, timeout=45000, wait_until="domcontentloaded")
-            
-            await page.mouse.wheel(0, 500)
-            await asyncio.sleep(10)
-            
-            try:
-                page_title = await page.title()
-                # Clean up title for filename
-                page_title = "".join(c for c in page_title if c.isalnum() or c in (' ', '-', '_')).strip()
-            except:
-                pass
-                
-            await browser.close()
-    except Exception as e:
-        print(f"Playwright extraction error: {e}")
-        
-    return stream_url, page_title
 
 def human_readable_size(size):
     if not size:
@@ -460,22 +407,6 @@ async def handle_url(client, message: Message):
     if not (url.startswith("http://") or url.startswith("https://")):
         await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.\nAgar custom naam chahiye toh aise bhejein:\n`URL | MyVideo.mp4`")
         return
-
-    # If it's not a direct stream or shemaroo link, try to extract with Playwright
-    if not stream_key and not url.lower().endswith(('.m3u8', '.mp4', '.mkv', '.webm', '.avi', '.ts')):
-        status_msg = await message.reply_text("🔍 Analyzing webpage and extracting stream... (Isme thoda time lag sakta hai)")
-        extracted_url, extracted_title = await extract_stream_from_page(url)
-        if extracted_url:
-            await status_msg.delete()
-            url = extracted_url
-            if not custom_name:
-                custom_name = f"{extracted_title}.mp4" if extracted_title else "Extracted_Video.mp4"
-            # Optional: Add Proxy if the user requested it for extracted URLs
-            if "m3u8-proxy" not in url:
-                url = f"https://m3u8-proxy-v1.jahinalamshamim.workers.dev/proxy?url={url}"
-        else:
-            await status_msg.edit_text("❌ Is page se stream URL automatically nahi nikal paya. Ya toh site supported nahi hai, ya anti-bot security hai.")
-            return
 
     await process_single_link(client, message.chat.id, url, custom_name, None, "", None, stream_key)
 
