@@ -41,6 +41,7 @@ app = Client(
 )
 
 active_processes = {}
+user_states = {}
 
 def decrypt_shemaroo_url(url_line):
     params_str = url_line.replace('shemaroomovies-', '')
@@ -176,12 +177,12 @@ async def stop_process_cb(client, callback_query: CallbackQuery):
     else:
         await callback_query.answer("❌ Koi process chal nahi raha.", show_alert=True)
 
-async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix="", quality_text=None, stream_key=None):
+async def process_single_link(client, chat_id, url, custom_name=None, banner_url=None, prefix="", quality_text=None, stream_key=None, banner_path=None):
     status_msg = await client.send_message(chat_id, f"⏳ {prefix} Link process kar raha hu...\n`{url}`")
     file_name = "downloaded_file"
     
     try:
-        thumb_path = None
+        thumb_path = banner_path
         # Extract filename from URL or use custom name
         if custom_name:
             file_name = custom_name
@@ -258,8 +259,10 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                         msg['content-type'] = content_dispo
                         filename_from_header = msg.get_param('filename', header='content-type')
                         if filename_from_header:
-                            file_name = urllib.parse.unquote(filename_from_header)
-                            file_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '-', '_')).strip()
+                            new_file_name = urllib.parse.unquote(filename_from_header)
+                            new_file_name = "".join(c for c in new_file_name if c.isalnum() or c in (' ', '.', '-', '_')).strip()
+                            if new_file_name:
+                                file_name = new_file_name
                     
                     if "." not in file_name:
                         content_type = response.headers.get('Content-Type', '').split(';')[0]
@@ -310,7 +313,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
             caption_text += f"\n\n**Quality:** {quality_text}"
         
         # --- THUMBNAIL / BANNER HANDLING ---
-        if banner_url:
+        if banner_url and not thumb_path:
             try:
                 async with aiohttp.ClientSession() as session:
                     async with session.get(banner_url) as resp:
@@ -388,8 +391,50 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         if thumb_path and os.path.exists(thumb_path):
             os.remove(thumb_path)
 
-@app.on_message(filters.text & filters.private & ~filters.command(["start", "stop"]))
-async def handle_url(client, message: Message):
+@app.on_message((filters.text | filters.photo | filters.document) & filters.private & ~filters.command(["start", "stop"]))
+async def handle_message(client, message: Message):
+    chat_id = message.chat.id
+    
+    if chat_id in user_states:
+        state_data = user_states[chat_id]
+        
+        if state_data['state'] == 'WAITING_FOR_NAME':
+            if message.text:
+                if message.text.strip().lower() in ["/skip", "ok"]:
+                    state_data['custom_name'] = None
+                else:
+                    state_data['custom_name'] = message.text.strip()
+            else:
+                state_data['custom_name'] = None
+                
+            state_data['state'] = 'WAITING_FOR_BANNER'
+            await message.reply_text("🖼️ Ab is video ke liye Cover Banner (Photo/Document) bhejein, ya phir 'ok' likh kar bhej dein agar banner nahi lagana hai:")
+            return
+            
+        elif state_data['state'] == 'WAITING_FOR_BANNER':
+            banner_path = None
+            if message.photo:
+                banner_path = await message.download()
+            elif message.document and message.document.mime_type and message.document.mime_type.startswith('image/'):
+                banner_path = await message.download()
+            elif message.text and message.text.strip().lower() in ["/skip", "ok"]:
+                pass
+            else:
+                await message.reply_text("❌ Kripya ek photo bhejein ya 'ok' likhein.")
+                return
+            
+            url = state_data['url']
+            custom_name = state_data['custom_name']
+            stream_key = state_data.get('stream_key')
+            del user_states[chat_id]
+            
+            await process_single_link(client, chat_id, url, custom_name=custom_name, banner_path=banner_path, stream_key=stream_key)
+            return
+
+    # New URL handling
+    if not message.text:
+        return
+        
     text = message.text.strip()
     
     if "|" in text:
@@ -415,10 +460,15 @@ async def handle_url(client, message: Message):
             return
             
     if not (url.startswith("http://") or url.startswith("https://")):
-        await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.\nAgar custom naam chahiye toh aise bhejein:\n`URL | MyVideo.mp4`")
+        await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.")
         return
 
-    await process_single_link(client, message.chat.id, url, custom_name, None, "", None, stream_key)
+    if custom_name:
+        user_states[chat_id] = {'url': url, 'custom_name': custom_name, 'stream_key': stream_key, 'state': 'WAITING_FOR_BANNER'}
+        await message.reply_text(f"✅ Name set: `{custom_name}`\n\n🖼️ Ab is video ke liye Cover Banner (Photo/Document) bhejein, ya phir 'ok' likh kar bhej dein:")
+    else:
+        user_states[chat_id] = {'url': url, 'stream_key': stream_key, 'state': 'WAITING_FOR_NAME'}
+        await message.reply_text("📝 Kripya is video ke liye Custom Name (Title) likh kar bhejein.\n\nAgar default name use karna hai toh 'ok' likh kar bhejein:")
 
 def parse_json_playlist(file_path):
     items = []
