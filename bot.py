@@ -20,6 +20,7 @@ import aiohttp
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from dotenv import load_dotenv
+from playwright.async_api import async_playwright
 
 # Load environment variables from .env file
 load_dotenv()
@@ -100,6 +101,38 @@ def decrypt_shemaroo_url(url_line):
     except Exception as e:
         print("Shemaroo API Error:", e)
         return None, None, None
+
+async def extract_stream_from_page(page_url):
+    stream_url = None
+    try:
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+            )
+            page = await context.new_page()
+
+            async def handle_response(response):
+                nonlocal stream_url
+                url = response.url
+                # Look for m3u8 or mp4 files in the network traffic
+                if (".m3u8" in url or ".mp4" in url) and not stream_url:
+                    # Ignore common ads or tracking mp4s/m3u8s if needed
+                    if "ad_" not in url and "tracking" not in url:
+                        stream_url = url
+                        print(f"Extracted Stream URL: {stream_url}")
+
+            page.on("response", handle_response)
+            
+            print(f"Navigating to: {page_url}")
+            await page.goto(page_url, timeout=30000, wait_until="domcontentloaded")
+            # Wait a few seconds for video player to initialize and fetch the stream
+            await asyncio.sleep(8)
+            await browser.close()
+    except Exception as e:
+        print(f"Playwright extraction error: {e}")
+        
+    return stream_url
 
 def human_readable_size(size):
     if not size:
@@ -407,6 +440,22 @@ async def handle_url(client, message: Message):
     if not (url.startswith("http://") or url.startswith("https://")):
         await message.reply_text("Kripya ek valid HTTP/HTTPS URL bhejein bhai.\nAgar custom naam chahiye toh aise bhejein:\n`URL | MyVideo.mp4`")
         return
+
+    # If it's not a direct stream or shemaroo link, try to extract with Playwright
+    if not stream_key and not url.lower().endswith(('.m3u8', '.mp4', '.mkv', '.webm', '.avi', '.ts')):
+        status_msg = await message.reply_text("🔍 Analyzing webpage and extracting stream... (Isme thoda time lag sakta hai)")
+        extracted_url = await extract_stream_from_page(url)
+        if extracted_url:
+            await status_msg.delete()
+            url = extracted_url
+            if not custom_name:
+                custom_name = "Extracted_Video.mp4"
+            # Optional: Add Proxy if the user requested it for extracted URLs
+            if "m3u8-proxy" not in url:
+                url = f"https://m3u8-proxy-v1.jahinalamshamim.workers.dev/proxy?url={url}"
+        else:
+            await status_msg.edit_text("❌ Is page se stream URL automatically nahi nikal paya. Ya toh site supported nahi hai, ya anti-bot security hai.")
+            return
 
     await process_single_link(client, message.chat.id, url, custom_name, None, "", None, stream_key)
 
