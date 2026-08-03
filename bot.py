@@ -186,13 +186,23 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         if custom_name:
             file_name = custom_name
         else:
-            file_name = url.split("/")[-1].split("?")[0]
+            import urllib.parse
+            parsed_url = urllib.parse.urlparse(url)
+            
+            # Check if there is a 'url' parameter in query (common for proxies)
+            query_params = urllib.parse.parse_qs(parsed_url.query)
+            target_url = url
+            if 'url' in query_params:
+                target_url = query_params['url'][0]
+                parsed_url = urllib.parse.urlparse(target_url)
+                
+            file_name = urllib.parse.unquote(parsed_url.path.split('/')[-1])
             if not file_name:
                 file_name = "downloaded_file"
                 
         # ensure no invalid characters in filename
         file_name = "".join(c for c in file_name if c.isalnum() or c in (' ', '.', '-', '_')).strip()
-        if not file_name:
+        if not file_name or file_name == "." or file_name.startswith(".mp4"):
             file_name = "downloaded_file"
 
         await safe_edit_text(status_msg, f"📥 {prefix} **Downloading Start:** `{file_name}`...")
