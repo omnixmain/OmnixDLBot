@@ -296,7 +296,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                                 except Exception:
                                     pass
 
-        await safe_edit_text(status_msg, f"📤 {prefix} Download Complete! Ab Telegram par upload kar raha hu...")
+        await safe_edit_text(status_msg, f"📤 {prefix} Download Complete! File check kar raha hu...")
         
         upload_start_time = time.time()
         
@@ -325,61 +325,140 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                 thumb_path = None
         # -----------------------------------
 
-        if is_video:
-            width, height, duration = 0, 0, 0
-            try:
-                import subprocess, json as subprocess_json
-                probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", file_name]
-                probe_out = subprocess.check_output(probe_cmd).decode("utf-8")
-                probe_data = subprocess_json.loads(probe_out)
-                video_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'video'), None)
-                if video_stream:
-                    width = int(video_stream.get('width', 0))
-                    height = int(video_stream.get('height', 0))
-                duration = int(float(probe_data.get('format', {}).get('duration', 0)))
-                
-                if not thumb_path:
-                    thumb_path = file_name + ".jpg"
-                    subprocess.call(["ffmpeg", "-i", file_name, "-ss", "00:00:01.000", "-vframes", "1", thumb_path, "-y", "-v", "quiet"])
-            except Exception:
-                pass
+        import math
+        file_size = os.path.getsize(file_name) if os.path.exists(file_name) else 0
+        max_size = 1950 * 1024 * 1024 # 1950 MB
 
-            await client.send_video(
-                chat_id=chat_id,
-                video=file_name,
-                caption=caption_text,
-                duration=duration,
-                width=width,
-                height=height,
-                thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
-                progress=progress_for_pyrogram,
-                progress_args=(f"📤 {prefix} **Uploading Video...**", status_msg, upload_start_time)
-            )
-            if thumb_path and os.path.exists(thumb_path):
-                os.remove(thumb_path)
-        elif is_image:
-            await client.send_photo(
-                chat_id=chat_id,
-                photo=file_name,
-                caption=caption_text,
-                progress=progress_for_pyrogram,
-                progress_args=(f"📤 {prefix} **Uploading Photo...**", status_msg, upload_start_time)
-            )
-        else:
-            await client.send_document(
-                chat_id=chat_id,
-                document=file_name,
-                caption=caption_text,
-                thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
-                progress=progress_for_pyrogram,
-                progress_args=(f"📤 {prefix} **Uploading...**", status_msg, upload_start_time)
-            )
-            if thumb_path and os.path.exists(thumb_path):
-                os.remove(thumb_path)
-        
-        # Space bachane ke liye file delete karna
+        upload_items = [file_name]
+
+        if file_size > max_size:
+            if is_video:
+                await safe_edit_text(status_msg, f"✂️ {prefix} Video 2GB se badi hai ({(file_size/(1024*1024)):.2f}MB). Parts me split kar raha hu, kripya pratiksha karein...")
+                duration_for_split = 0
+                try:
+                    import subprocess, json as subprocess_json
+                    probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", file_name]
+                    probe_out = subprocess.check_output(probe_cmd).decode("utf-8")
+                    probe_data = subprocess_json.loads(probe_out)
+                    duration_for_split = float(probe_data.get('format', {}).get('duration', 0))
+                except Exception as e:
+                    print("Error getting duration for split:", e)
+                    
+                if duration_for_split > 0:
+                    # Calculate segment duration to keep each part under ~1900MB
+                    num_parts = math.ceil(file_size / (1900 * 1024 * 1024))
+                    segment_time = int(duration_for_split / num_parts)
+                    
+                    base_name, ext = os.path.splitext(file_name)
+                    split_pattern = f"{base_name}_part%03d{ext}"
+                    
+                    split_cmd = [
+                        "ffmpeg", "-i", file_name, 
+                        "-c", "copy", "-map", "0", "-f", "segment", 
+                        "-segment_time", str(segment_time), 
+                        "-reset_timestamps", "1", 
+                        split_pattern
+                    ]
+                    
+                    try:
+                        subprocess.run(split_cmd, check=True)
+                        import glob
+                        part_files = sorted(glob.glob(f"{base_name}_part*{ext}"))
+                        if part_files:
+                            upload_items = part_files
+                    except Exception as e:
+                        print("Error during video splitting:", e)
+            else:
+                await safe_edit_text(status_msg, f"✂️ {prefix} File 2GB se badi hai. Parts me split kar raha hu...")
+                base_name, ext = os.path.splitext(file_name)
+                chunk_size = 1900 * 1024 * 1024
+                num_parts = math.ceil(file_size / chunk_size)
+                parts = []
+                try:
+                    with open(file_name, 'rb') as f:
+                        for i in range(1, num_parts + 1):
+                            part_name = f"{base_name}_part{i:03d}{ext}"
+                            with open(part_name, 'wb') as chunk_file:
+                                chunk_file.write(f.read(chunk_size))
+                            parts.append(part_name)
+                    if parts:
+                        upload_items = parts
+                except Exception as e:
+                    print("Error splitting document:", e)
+
+        total_parts = len(upload_items)
+
+        for part_idx, current_file in enumerate(upload_items, 1):
+            if not os.path.exists(current_file):
+                continue
+                
+            current_caption = caption_text
+            if total_parts > 1:
+                current_caption += f"\n\n**Part {part_idx} of {total_parts}**"
+
+            part_label = f" (Part {part_idx}/{total_parts})" if total_parts > 1 else ""
+
+            if is_video:
+                width, height, duration = 0, 0, 0
+                current_thumb = thumb_path
+                try:
+                    import subprocess, json as subprocess_json
+                    probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", current_file]
+                    probe_out = subprocess.check_output(probe_cmd).decode("utf-8")
+                    probe_data = subprocess_json.loads(probe_out)
+                    video_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'video'), None)
+                    if video_stream:
+                        width = int(video_stream.get('width', 0))
+                        height = int(video_stream.get('height', 0))
+                    duration = int(float(probe_data.get('format', {}).get('duration', 0)))
+                    
+                    if not current_thumb:
+                        current_thumb = current_file + ".jpg"
+                        subprocess.call(["ffmpeg", "-i", current_file, "-ss", "00:00:01.000", "-vframes", "1", current_thumb, "-y", "-v", "quiet"])
+                except Exception:
+                    pass
+
+                await client.send_video(
+                    chat_id=chat_id,
+                    video=current_file,
+                    caption=current_caption,
+                    duration=duration,
+                    width=width,
+                    height=height,
+                    thumb=current_thumb if (current_thumb and os.path.exists(current_thumb)) else None,
+                    progress=progress_for_pyrogram,
+                    progress_args=(f"📤 {prefix} **Uploading Video{part_label}...**", status_msg, time.time())
+                )
+                if current_thumb and current_thumb != thumb_path and os.path.exists(current_thumb):
+                    os.remove(current_thumb)
+            elif is_image:
+                await client.send_photo(
+                    chat_id=chat_id,
+                    photo=current_file,
+                    caption=current_caption,
+                    progress=progress_for_pyrogram,
+                    progress_args=(f"📤 {prefix} **Uploading Photo{part_label}...**", status_msg, time.time())
+                )
+            else:
+                await client.send_document(
+                    chat_id=chat_id,
+                    document=current_file,
+                    caption=current_caption,
+                    thumb=thumb_path if (thumb_path and os.path.exists(thumb_path)) else None,
+                    progress=progress_for_pyrogram,
+                    progress_args=(f"📤 {prefix} **Uploading{part_label}...**", status_msg, time.time())
+                )
+            
+            # Delete part file after upload if it was a split part
+            if current_file != file_name and os.path.exists(current_file):
+                os.remove(current_file)
+
+        # Space bachane ke liye original file delete karna
         if os.path.exists(file_name):
             os.remove(file_name)
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
+            
         await status_msg.delete()
         
     except Exception as e:
