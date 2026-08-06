@@ -307,15 +307,31 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         clean_name = clean_name.replace('.', ' ').replace('-', ' ').replace('_', ' ')
         clean_name = re.sub(r'\s+', ' ', clean_name).strip()
         
-        caption_text = f"**{clean_name}**"
+        # Quality extraction
+        quality = "Unknown"
+        q_match = re.search(r'(1080p|720p|480p|2160p|4K|1440p|360p)', file_name, re.IGNORECASE)
         if quality_text:
-            caption_text += f"\n\n**Quality:** {quality_text}"
+            quality = quality_text
+        elif q_match:
+            quality = q_match.group(1).lower()
+            
+        # Language extraction
+        lang_list = []
+        langs = {'hin': 'Hindi', 'tam': 'Tamil', 'tel': 'Telugu', 'mal': 'Malayalam', 'kan': 'Kannada', 'eng': 'English', 'mar': 'Marathi', 'ben': 'Bengali', 'guj': 'Gujarati', 'pun': 'Punjabi'}
+        for k, v in langs.items():
+            if re.search(r'\b' + k + r'\b', file_name, re.IGNORECASE) or re.search(r'\b' + v + r'\b', file_name, re.IGNORECASE):
+                lang_list.append(v)
+        
+        language = " + ".join(lang_list) if lang_list else "Unknown"
+        if not lang_list and "multi" in file_name.lower():
+            language = "Multi Audio"
         
         # --- THUMBNAIL / BANNER HANDLING ---
         if banner_url and not thumb_path:
             try:
+                headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"}
                 async with aiohttp.ClientSession() as session:
-                    async with session.get(banner_url) as resp:
+                    async with session.get(banner_url, headers=headers) as resp:
                         if resp.status == 200:
                             thumb_path = f"thumb_{time.time()}.jpg"
                             with open(thumb_path, 'wb') as tf:
@@ -327,7 +343,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
 
         import math
         file_size = os.path.getsize(file_name) if os.path.exists(file_name) else 0
-        max_size = 1950 * 1024 * 1024 # 1950 MB
+        max_size = 2000 * 1024 * 1024 # 2000 MB
 
         upload_items = [file_name]
 
@@ -345,20 +361,36 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                     print("Error getting duration for split:", e)
                     
                 if duration_for_split > 0:
-                    # Calculate segment duration to keep each part under ~1900MB
-                    num_parts = math.ceil(file_size / (1900 * 1024 * 1024))
-                    segment_time = int(duration_for_split / num_parts)
+                    # Calculate segment duration to keep each part under ~1990MB
+                    target_chunk_size = 1990 * 1024 * 1024
+                    chunk_duration = (target_chunk_size / file_size) * duration_for_split
                     
+                    split_times = []
+                    current_time = chunk_duration
+                    while current_time < duration_for_split - 5: # -5s to avoid tiny last chunk
+                        split_times.append(str(round(current_time, 2)))
+                        current_time += chunk_duration
+                        
                     base_name, ext = os.path.splitext(file_name)
                     split_pattern = f"{base_name}_part%03d{ext}"
                     
-                    split_cmd = [
-                        "ffmpeg", "-i", file_name, 
-                        "-c", "copy", "-map", "0", "-f", "segment", 
-                        "-segment_time", str(segment_time), 
-                        "-reset_timestamps", "1", 
-                        split_pattern
-                    ]
+                    if split_times:
+                        times_str = ",".join(split_times)
+                        split_cmd = [
+                            "ffmpeg", "-i", file_name, 
+                            "-c", "copy", "-map", "0", "-f", "segment", 
+                            "-segment_times", times_str, 
+                            "-reset_timestamps", "1", 
+                            split_pattern
+                        ]
+                    else:
+                        split_cmd = [
+                            "ffmpeg", "-i", file_name, 
+                            "-c", "copy", "-map", "0", "-f", "segment", 
+                            "-segment_time", str(int(duration_for_split / 2)), 
+                            "-reset_timestamps", "1", 
+                            split_pattern
+                        ]
                     
                     try:
                         subprocess.run(split_cmd, check=True)
@@ -371,7 +403,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
             else:
                 await safe_edit_text(status_msg, f"✂️ {prefix} File 2GB se badi hai. Parts me split kar raha hu...")
                 base_name, ext = os.path.splitext(file_name)
-                chunk_size = 1900 * 1024 * 1024
+                chunk_size = 1990 * 1024 * 1024
                 num_parts = math.ceil(file_size / chunk_size)
                 parts = []
                 try:
@@ -391,10 +423,26 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
         for part_idx, current_file in enumerate(upload_items, 1):
             if not os.path.exists(current_file):
                 continue
-                
-            current_caption = caption_text
+            part_size = os.path.getsize(current_file)
+            part_size_str = human_readable_size(part_size)
+            
             if total_parts > 1:
-                current_caption += f"\n\n**Part {part_idx} of {total_parts}**"
+                ext = os.path.splitext(current_file)[1]
+                new_name = f"{clean_name} (Part {part_idx}){ext}"
+                if current_file != new_name:
+                    try:
+                        os.rename(current_file, new_name)
+                        current_file = new_name
+                    except Exception as e:
+                        print("Rename error:", e)
+                        
+            current_caption = (
+                f"**{clean_name}**\n\n"
+                f"**Quality** • {quality}\n"
+                f"**Language** • {language}\n"
+                f"**Size** • {part_size_str}\n\n"
+                f"**Powered by OMNIX EMPIRE ⚡**"
+            )
 
             part_label = f" (Part {part_idx}/{total_parts})" if total_parts > 1 else ""
 
