@@ -354,7 +354,8 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                 try:
                     import subprocess, json as subprocess_json
                     probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", file_name]
-                    probe_out = subprocess.check_output(probe_cmd).decode("utf-8")
+                    probe_out = await asyncio.to_thread(subprocess.check_output, probe_cmd)
+                    probe_out = probe_out.decode("utf-8")
                     probe_data = subprocess_json.loads(probe_out)
                     duration_for_split = float(probe_data.get('format', {}).get('duration', 0))
                 except Exception as e:
@@ -393,7 +394,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                         ]
                     
                     try:
-                        subprocess.run(split_cmd, check=True)
+                        await asyncio.to_thread(subprocess.run, split_cmd, check=True)
                         import glob
                         part_files = sorted(glob.glob(f"{base_name}_part*{ext}"))
                         if part_files:
@@ -407,12 +408,14 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                 num_parts = math.ceil(file_size / chunk_size)
                 parts = []
                 try:
-                    with open(file_name, 'rb') as f:
-                        for i in range(1, num_parts + 1):
-                            part_name = f"{base_name}_part{i:03d}{ext}"
-                            with open(part_name, 'wb') as chunk_file:
-                                chunk_file.write(f.read(chunk_size))
-                            parts.append(part_name)
+                    def _split_doc():
+                        with open(file_name, 'rb') as f:
+                            for i in range(1, num_parts + 1):
+                                part_name = f"{base_name}_part{i:03d}{ext}"
+                                with open(part_name, 'wb') as chunk_file:
+                                    chunk_file.write(f.read(chunk_size))
+                                parts.append(part_name)
+                    await asyncio.to_thread(_split_doc)
                     if parts:
                         upload_items = parts
                 except Exception as e:
@@ -452,7 +455,8 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                 try:
                     import subprocess, json as subprocess_json
                     probe_cmd = ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", "-show_streams", current_file]
-                    probe_out = subprocess.check_output(probe_cmd).decode("utf-8")
+                    probe_out = await asyncio.to_thread(subprocess.check_output, probe_cmd)
+                    probe_out = probe_out.decode("utf-8")
                     probe_data = subprocess_json.loads(probe_out)
                     video_stream = next((s for s in probe_data.get('streams', []) if s.get('codec_type') == 'video'), None)
                     if video_stream:
@@ -462,7 +466,7 @@ async def process_single_link(client, chat_id, url, custom_name=None, banner_url
                     
                     if not current_thumb:
                         current_thumb = current_file + ".jpg"
-                        subprocess.call(["ffmpeg", "-i", current_file, "-ss", "00:00:01.000", "-vframes", "1", current_thumb, "-y", "-v", "quiet"])
+                        await asyncio.to_thread(subprocess.call, ["ffmpeg", "-i", current_file, "-ss", "00:00:01.000", "-vframes", "1", current_thumb, "-y", "-v", "quiet"])
                 except Exception:
                     pass
 
